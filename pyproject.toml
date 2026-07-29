@@ -22,3 +22,7 @@ train-ticket-classifier = "ticket_triage.train:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]

@@ -8,6 +8,7 @@ import pytest
 from ticket_triage.constants import ALLOWED_LABELS
 from ticket_triage.model import build_pipeline, fit_pipeline, save_pipeline
 from ticket_triage.predictor import load_model
+from ticket_triage.score import main as score_main
 from ticket_triage.score import score_csv
 
 
@@ -49,6 +50,11 @@ def test_predictor_returns_approved_label_and_confidence(fitted_model: Path) -> 
     assert 0.0 <= result.confidence <= 1.0
 
 
+def test_trained_pipeline_can_be_saved_reloaded_and_used(fitted_model: Path) -> None:
+    predictor = load_model(fitted_model)
+    assert predictor.predict("Please help with my account") in ALLOWED_LABELS
+
+
 @pytest.mark.parametrize(
     ("message", "error_type"),
     [(None, ValueError), (123, TypeError), ("", ValueError), ("  ", ValueError)],
@@ -86,10 +92,55 @@ def test_score_csv_preserves_rows_columns_and_order(
     )
     scored = pd.read_csv(destination)
 
+    assert len(scored) == len(original)
     assert scored["ticket_id"].tolist() == [30, 10, 20]
     assert scored["message"].tolist() == original["message"].tolist()
+    assert scored.columns.tolist() == [
+        "ticket_id",
+        "message",
+        "prediction",
+        "confidence",
+    ]
     assert set(scored["prediction"]).issubset(ALLOWED_LABELS)
     assert scored["confidence"].between(0.0, 1.0).all()
+
+
+def test_score_csv_rejects_missing_text_column(
+    fitted_model: Path, tmp_path: Path
+) -> None:
+    source = tmp_path / "holdout.csv"
+    pd.DataFrame({"message": ["Help with my account"]}).to_csv(source, index=False)
+
+    with pytest.raises(ValueError, match="missing text column: text"):
+        score_csv(
+            model_path=fitted_model,
+            input_path=source,
+            output_path=tmp_path / "output.csv",
+        )
+
+
+def test_scoring_cli_succeeds_on_valid_input(
+    fitted_model: Path, tmp_path: Path
+) -> None:
+    source = tmp_path / "holdout.csv"
+    destination = tmp_path / "results" / "scored.csv"
+    pd.DataFrame(
+        {"ticket_id": [2, 1], "text": ["My login failed", "How does staking work"]}
+    ).to_csv(source, index=False)
+
+    exit_code = score_main(
+        [
+            "--model",
+            str(fitted_model),
+            "--input",
+            str(source),
+            "--output",
+            str(destination),
+        ]
+    )
+
+    assert exit_code == 0
+    assert destination.is_file()
 
 
 def test_score_csv_rejects_invalid_row(fitted_model: Path, tmp_path: Path) -> None:
