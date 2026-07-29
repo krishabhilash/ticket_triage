@@ -103,8 +103,15 @@ the additional false-positive fraud escalations would need operational review.
 ## Test
 
 ```bash
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
 .venv/bin/python -m pytest
 ```
+
+These are the local equivalents of the GitHub Actions checks. CI runs them on
+Python 3.11 and 3.12 for every pull request and push to `main`, then performs a
+production-image build without starting or publishing it. CI uses no secrets,
+customer-data uploads, or live Gemini evaluation.
 
 ## Optional HTTP API
 

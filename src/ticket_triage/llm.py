@@ -4,13 +4,13 @@ The Google SDK is imported only by ``from_env``. Classical training and
 inference therefore require neither this optional dependency nor network access.
 """
 
+import json
+import os
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from hashlib import sha256
-import json
-import os
 from pathlib import Path
-import time
 from typing import Any
 
 from ticket_triage.constants import ALLOWED_LABELS

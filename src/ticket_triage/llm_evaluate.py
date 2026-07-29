@@ -1,11 +1,10 @@
 """Optional live comparison of Gemini and the classical grouped holdout."""
 
 import argparse
-from collections.abc import Sequence
 import os
-from pathlib import Path
 import statistics
 import time
+from collections.abc import Sequence
 
 import pandas as pd
 from sklearn.model_selection import StratifiedGroupKFold
@@ -21,16 +20,16 @@ from ticket_triage.template_groups import build_template_groups
 def _first_grouped_fold(frame: pd.DataFrame) -> tuple[list[int], list[int]]:
     """Return the first deterministic grouped fold used for both comparisons."""
     groups = build_template_groups(frame[TEXT_COLUMN].tolist())
-    splitter = StratifiedGroupKFold(
-        n_splits=5, shuffle=True, random_state=RANDOM_STATE
-    )
+    splitter = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
     train_indices, evaluation_indices = next(
         splitter.split(frame[TEXT_COLUMN], frame[LABEL_COLUMN], groups)
     )
     return train_indices.tolist(), evaluation_indices.tolist()
 
 
-def _metric_row(name: str, labels: list[str], predictions: list[str]) -> dict[str, object]:
+def _metric_row(
+    name: str, labels: list[str], predictions: list[str]
+) -> dict[str, object]:
     result = evaluate_predictions(labels, predictions)
     fraud = result.per_class[FRAUD_LABEL]
     return {
@@ -56,9 +55,7 @@ def run_live_comparison(
     evaluation_frame = frame.iloc[evaluation_indices]
     expected = evaluation_frame[LABEL_COLUMN].tolist()
 
-    pipeline = fit_pipeline(
-        build_pipeline(class_weight=class_weight), train_frame
-    )
+    pipeline = fit_pipeline(build_pipeline(class_weight=class_weight), train_frame)
     started = time.perf_counter()
     classical_predictions = predict(pipeline, evaluation_frame[TEXT_COLUMN])
     classical_latency = time.perf_counter() - started
@@ -87,7 +84,11 @@ def run_live_comparison(
         cached_responses += int(result.cached)
 
     rows = [
-        _metric_row("Classical balanced" if class_weight else "Classical unweighted", expected, classical_predictions)
+        _metric_row(
+            "Classical balanced" if class_weight else "Classical unweighted",
+            expected,
+            classical_predictions,
+        )
     ]
     if llm_predictions:
         rows.append(_metric_row("Gemini", llm_expected, llm_predictions))

@@ -26,9 +26,7 @@ def test_validation_rejects_empty_messages() -> None:
 
 def test_loading_rejects_unknown_label(tmp_path: Path) -> None:
     source = tmp_path / "unknown-label.csv"
-    pd.DataFrame({"text": ["Help"], "label": ["other"]}).to_csv(
-        source, index=False
-    )
+    pd.DataFrame({"text": ["Help"], "label": ["other"]}).to_csv(source, index=False)
 
     with pytest.raises(ValueError, match="unknown labels"):
         load_dataset(source)

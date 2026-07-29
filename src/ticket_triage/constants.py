@@ -10,4 +10,3 @@ TEXT_COLUMN = "text"
 LABEL_COLUMN = "label"
 FRAUD_LABEL = "fraud-report"
 RANDOM_STATE = 42
-

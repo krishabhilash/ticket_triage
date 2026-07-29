@@ -2,7 +2,13 @@
 
 from dataclasses import dataclass
 
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score, recall_score
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    recall_score,
+)
 
 from ticket_triage.constants import ALLOWED_LABELS, FRAUD_LABEL
 
@@ -78,4 +84,3 @@ def format_evaluation(result: EvaluationResult) -> str:
         ]
     )
     return "\n".join(lines)
-

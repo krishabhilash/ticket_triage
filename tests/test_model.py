@@ -14,4 +14,3 @@ def test_pipeline_contains_expected_configuration() -> None:
 def test_pipeline_rejects_invalid_class_weight() -> None:
     with pytest.raises(ValueError, match="class_weight"):
         build_pipeline(class_weight="invalid")  # type: ignore[arg-type]
-

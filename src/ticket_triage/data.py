@@ -6,7 +6,12 @@ from typing import TypeAlias
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from ticket_triage.constants import ALLOWED_LABELS, LABEL_COLUMN, RANDOM_STATE, TEXT_COLUMN
+from ticket_triage.constants import (
+    ALLOWED_LABELS,
+    LABEL_COLUMN,
+    RANDOM_STATE,
+    TEXT_COLUMN,
+)
 
 PathLike: TypeAlias = str | Path
 
@@ -52,4 +57,3 @@ def stratified_split(
         stratify=frame[LABEL_COLUMN],
     )
     return train_frame.reset_index(drop=True), validation_frame.reset_index(drop=True)
-

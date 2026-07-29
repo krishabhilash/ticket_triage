@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
 import pandas as pd
 import pytest
+from fastapi.testclient import TestClient
 
 from ticket_triage.api import MAX_BATCH_SIZE, MAX_MESSAGE_LENGTH, create_app
 from ticket_triage.constants import ALLOWED_LABELS

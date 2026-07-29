@@ -1,8 +1,8 @@
 """Thin FastAPI transport for the fitted classical ticket classifier."""
 
-from contextlib import asynccontextmanager
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
 from typing import Annotated, Literal

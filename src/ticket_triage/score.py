@@ -31,7 +31,9 @@ def score_csv(
         try:
             messages.append(validate_message(value))
         except (TypeError, ValueError) as error:
-            raise ValueError(f"Invalid message at CSV row {row_number}: {error}") from error
+            raise ValueError(
+                f"Invalid message at CSV row {row_number}: {error}"
+            ) from error
 
     predictor = load_model(model_path)
     predictions = [predictor.predict_with_confidence(message) for message in messages]
@@ -42,9 +44,7 @@ def score_csv(
 
     output_frame = frame.copy()
     output_frame["prediction"] = labels
-    output_frame["confidence"] = [
-        prediction.confidence for prediction in predictions
-    ]
+    output_frame["confidence"] = [prediction.confidence for prediction in predictions]
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     output_frame.to_csv(destination, index=False)

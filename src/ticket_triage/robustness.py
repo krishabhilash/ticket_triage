@@ -107,9 +107,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     group_count = len(set(build_template_groups(frame[TEXT_COLUMN].tolist())))
     print(f"Rows: {len(frame)}; heuristic template groups: {group_count}")
     print(
-        evaluate_robustness(frame).to_string(
-            float_format=lambda value: f"{value:.4f}"
-        )
+        evaluate_robustness(frame).to_string(float_format=lambda value: f"{value:.4f}")
     )
     print(
         "Note: template normalization is an evaluation-only heuristic; "

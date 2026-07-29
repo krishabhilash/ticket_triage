@@ -22,9 +22,7 @@ def build_pipeline(*, class_weight: ClassWeight = None) -> Pipeline:
         [
             (
                 "tfidf",
-                TfidfVectorizer(
-                    ngram_range=(1, 2), lowercase=True, sublinear_tf=True
-                ),
+                TfidfVectorizer(ngram_range=(1, 2), lowercase=True, sublinear_tf=True),
             ),
             (
                 "classifier",
@@ -55,4 +53,3 @@ def save_pipeline(pipeline: Pipeline, output_path: str | Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(pipeline, path)
     return path
-
