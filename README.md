@@ -9,7 +9,7 @@ Python 3.11 or newer is required.
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install -e '.[test]'
+.venv/bin/pip install -e '.[test,api]'
 ```
 
 ## Train
@@ -106,8 +106,51 @@ the additional false-positive fraud escalations would need operational review.
 .venv/bin/python -m pytest
 ```
 
-The production baseline intentionally excludes APIs, Docker, and deep learning.
-The provider comparison below remains isolated and optional.
+## Optional HTTP API
+
+Install the API extra and train the classical model first:
+
+```bash
+.venv/bin/pip install -e '.[api]'
+.venv/bin/python -m ticket_triage.train \
+  --data train.csv \
+  --model-output artifacts/model.joblib \
+  --class-weight balanced
+```
+
+`MODEL_PATH` selects the fitted pipeline and defaults to
+`artifacts/model.joblib`.
+
+```bash
+MODEL_PATH=artifacts/model.joblib \
+  .venv/bin/uvicorn ticket_triage.api:app --host 0.0.0.0 --port 8000
+```
+
+```bash
+curl --fail http://127.0.0.1:8000/health
+curl --fail http://127.0.0.1:8000/ready
+curl --fail --request POST http://127.0.0.1:8000/predict \
+  --header 'Content-Type: application/json' \
+  --data '{"text":"Someone withdrew BTC without my permission."}'
+curl --fail --request POST http://127.0.0.1:8000/predict/batch \
+  --header 'Content-Type: application/json' \
+  --data '{"texts":["I cannot log in.","I never authorized this withdrawal."]}'
+```
+
+The process loads the model once through FastAPI lifespan handling and never
+trains or changes it. Messages are limited to 4,000 characters and batches to
+100 messages. A lock protects concurrent read-only access to the shared fitted
+pipeline. Endpoints remain synchronous and thin; for materially larger CPU
+workloads, use additional worker processes or move inference to a controlled
+thread pool rather than adding ad-hoc async wrappers.
+
+Returned confidence is rounded to six decimal places only at serialization.
+The underlying logistic-regression probability is not calibrated and should
+not be interpreted as the probability that a prediction is correct.
+
+The production classifier remains usable without FastAPI, Docker, deep learning,
+or external services. The provider comparison below remains isolated and
+optional.
 
 ## Optional Gemini comparison
 
