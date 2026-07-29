@@ -14,11 +14,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+llm = ["google-genai>=1.0,<2"]
 test = ["pytest>=8,<9"]
 
 [project.scripts]
 score-ticket-classifier = "ticket_triage.score:main"
 train-ticket-classifier = "ticket_triage.train:main"
+evaluate-llm-classifier = "ticket_triage.llm_evaluate:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

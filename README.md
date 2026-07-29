@@ -106,5 +106,42 @@ the additional false-positive fraud escalations would need operational review.
 .venv/bin/python -m pytest
 ```
 
-This stage intentionally excludes APIs, Docker, LLM integration, and deep
-learning.
+The production baseline intentionally excludes APIs, Docker, and deep learning.
+The provider comparison below remains isolated and optional.
+
+## Optional Gemini comparison
+
+The classical classifier, scoring command, and default tests do not import the
+Gemini SDK and work without credentials or network access. To install the
+optional comparison dependency:
+
+```bash
+.venv/bin/pip install -e '.[llm]'
+```
+
+Configure `GEMINI_API_KEY` and `GEMINI_MODEL` in the process environment (for
+example, export them from a local ignored `.env` before running the command).
+Pricing is not hard-coded because it varies by model and date; set
+`GEMINI_INPUT_COST_PER_MILLION` and `GEMINI_OUTPUT_COST_PER_MILLION` to include
+an estimated request cost.
+
+The live command is deliberately gated by explicit acknowledgement:
+
+```bash
+.venv/bin/python -m ticket_triage.llm_evaluate \
+  --data train.csv \
+  --cache artifacts/llm_cache.json \
+  --confirm-live
+```
+
+It compares Gemini with the classical model on the same deterministic first
+fold from the existing template-grouped evaluation. Tickets are not used as
+few-shot examples. The prompt contains only the ticket, concise route
+definitions, and the fraud/dispute distinction. Responses are constrained and
+validated against the four approved labels, with bounded retries and no label
+fallback. The local cache uses hashed keys and stores labels, latency, and token
+counts—not ticket text or credentials.
+
+This comparison is optional, can incur API cost, and may not be reproducible
+across Gemini model versions. Reported latency includes provider latency, and
+token-derived cost is only an estimate based on the configured rates.
