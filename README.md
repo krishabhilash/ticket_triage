@@ -443,8 +443,6 @@ or use the core classifier. With more time, the priority would be independently
 written production-like evaluation data, label-guideline adjudication, calibration,
 threshold/cost analysis, drift baselines, load testing, and monitored shadow trials.
 
-**Candidate time spent:** `[complete before submission: ___ hours]`
-
 ## 20. Limitations
 
 - The training set has only 400 messages, including just 50 fraud examples.
