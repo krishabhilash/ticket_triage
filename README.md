@@ -28,6 +28,37 @@ pipeline ensures it is fitted only on training rows during validation.
 
 `--class-weight` accepts `none` or `balanced`.
 
+## Predict and score a holdout
+
+Load a previously fitted model for one-message inference:
+
+```python
+from ticket_triage import load_model
+
+predictor = load_model("artifacts/ticket_classifier.joblib")
+label = predictor.predict("I cannot access my account")
+result = predictor.predict_with_confidence("I did not authorize this transfer")
+```
+
+Score an unseen CSV without retraining:
+
+```bash
+.venv/bin/python -m ticket_triage.score \
+  --model artifacts/ticket_classifier.joblib \
+  --input holdout.csv \
+  --output predictions/holdout.csv
+```
+
+Use `--text-column message` when the input column is not named `text`. The
+output preserves every input row and column in its original order, then adds
+`prediction` and `confidence`. Invalid rows fail the complete scoring operation;
+they are never silently dropped. Inference is entirely local and never fits the
+pipeline on holdout messages.
+
+Confidence is the maximum value returned by logistic regression's
+`predict_proba`. It is an uncalibrated model score, not a calibrated probability
+that the prediction is correct.
+
 ## Evaluation caveat
 
 Macro F1 is the overall metric, with fraud recall reported separately because

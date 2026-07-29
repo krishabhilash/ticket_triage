@@ -17,8 +17,8 @@ dependencies = [
 test = ["pytest>=8,<9"]
 
 [project.scripts]
+score-ticket-classifier = "ticket_triage.score:main"
 train-ticket-classifier = "ticket_triage.train:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
