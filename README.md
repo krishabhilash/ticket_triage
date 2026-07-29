@@ -127,8 +127,8 @@ The balanced command above reproduced these results on 80 validation rows:
 | fraud-report | 1.0000 | 1.0000 | 1.0000 | 10 |
 | general | 1.0000 | 1.0000 | 1.0000 | 32 |
 
-Confusion-matrix label order is account-access, transaction-dispute,
-fraud-report, general:
+Confusion-matrix rows are true labels and columns are predicted labels. The order
+on both axes is account-access, transaction-dispute, fraud-report, general:
 
 ```text
 [[20,  0,  0,  0],
