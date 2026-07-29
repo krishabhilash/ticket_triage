@@ -15,13 +15,11 @@ dependencies = [
 
 [project.optional-dependencies]
 api = [
-  "anyio==4.8.0",
-  "fastapi==0.115.6",
-  "httpx==0.28.1",
-  "uvicorn==0.30.6",
+  "fastapi>=0.115,<0.116",
+  "uvicorn>=0.30,<0.31",
 ]
 llm = ["google-genai>=1.0,<2"]
-test = ["pytest>=8,<9"]
+test = ["httpx>=0.28,<0.29", "pytest>=8,<9"]
 
 [project.scripts]
 score-ticket-classifier = "ticket_triage.score:main"

@@ -148,6 +148,58 @@ Returned confidence is rounded to six decimal places only at serialization.
 The underlying logistic-regression probability is not calibrated and should
 not be interpreted as the probability that a prediction is correct.
 
+## Container
+
+Training and serving are separate lifecycle stages. Train on the host; the
+container only loads the resulting read-only artifact and serves predictions.
+
+```bash
+.venv/bin/python -m ticket_triage.train \
+  --data train.csv \
+  --model-output artifacts/model.joblib \
+  --class-weight balanced
+docker build --tag ticket-triage-api .
+```
+
+Run the image with the artifact directory mounted read-only:
+
+```bash
+docker run --rm --detach \
+  --name ticket-triage-api \
+  --publish 8000:8000 \
+  --env MODEL_PATH=/app/artifacts/model.joblib \
+  --volume "$(pwd)/artifacts:/app/artifacts:ro" \
+  ticket-triage-api
+```
+
+Wait for readiness, then inspect health and request a prediction:
+
+```bash
+until curl --fail --silent http://127.0.0.1:8000/ready; do sleep 1; done
+curl --fail http://127.0.0.1:8000/health
+curl --fail --request POST http://127.0.0.1:8000/predict \
+  --header 'Content-Type: application/json' \
+  --data '{"text":"Someone withdrew BTC without my permission."}'
+```
+
+Confirm the service user is non-root and stop the container:
+
+```bash
+test "$(docker exec ticket-triage-api id -u)" -ne 0
+docker stop ticket-triage-api
+```
+
+The image uses Python 3.12 slim, installs only the bounded direct dependencies
+in `requirements/runtime.txt`, and runs as UID 10001. `.dockerignore` excludes
+Git metadata, credentials, virtual environments, tests, caches, datasets, and
+model files. The model must be supplied at runtime through `MODEL_PATH` and a
+volume mount; neither classical nor LLM training runs during image startup.
+
+Reproducibility is managed through the pinned Python major/minor and bounded
+direct dependency versions. There is no lockfile, so builds are intentionally
+not claimed to be byte-for-byte reproducible; a release workflow should add a
+reviewed lockfile and optionally pin the base-image digest.
+
 The production classifier remains usable without FastAPI, Docker, deep learning,
 or external services. The provider comparison below remains isolated and
 optional.
