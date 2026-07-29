@@ -1,91 +1,153 @@
-# Ticket triage baseline
+# Ticket Triage: classical support-ticket classifier
 
-A classical classifier for routing support messages to `account-access`,
-`transaction-dispute`, `fraud-report`, or `general`.
+## 1. Project overview
 
-## Setup
+This repository implements the required classical ML solution for routing short
+support tickets into four queues:
 
-Python 3.11 or newer is required.
+- `account-access`: sign-in, password, verification-code, or locked-account issues
+- `transaction-dispute`: a recognized or user-initiated transaction is delayed,
+  incorrect, duplicated, unexpectedly priced, or missing
+- `fraud-report`: unauthorized activity, account compromise, phishing, scams,
+  theft, or impersonation
+- `general`: informational requests outside the other routes
 
-```bash
-python -m venv .venv
-.venv/bin/pip install -e '.[test,api]'
+The key boundary is authorization: a recognized transaction with a processing
+problem is a `transaction-dispute`; deceptive, unauthorized, or compromised-account
+activity is a `fraud-report`.
+
+## 2. Design summary
+
+The primary model is word unigram/bigram TF-IDF followed by multinomial logistic
+regression. For approximately 400 short labelled messages, this is fast, auditable,
+reproducible, and less prone to overfitting than training a deep model. It also
+provides a strong sparse-text baseline without an external service. The classical
+pipeline is the default training, prediction, scoring, and production path.
+
+```text
+validated CSV -> stratified split -> TF-IDF -> logistic regression -> metrics
+                                      |                |
+                                      +-- saved sklearn Pipeline --+-> local inference
 ```
 
-## Train
+TF-IDF is inside the scikit-learn `Pipeline`, so each validation fold learns its
+vocabulary only from that fold's training rows. Optional FastAPI, container, CI,
+production safeguards, and Gemini comparison are extensions—not requirements for
+running the core solution.
+
+## 3. Repository structure
+
+```text
+.
+├── src/ticket_triage/
+│   ├── constants.py        # labels, columns, and random seed
+│   ├── data.py             # CSV validation and stratified split
+│   ├── model.py            # TF-IDF/logistic-regression pipeline
+│   ├── evaluation.py       # classification metrics
+│   ├── train.py            # training CLI
+│   ├── predictor.py        # saved-model prediction interface
+│   ├── score.py            # holdout CSV scoring CLI
+│   ├── template_groups.py  # evaluation-only grouping heuristic
+│   ├── robustness.py       # random and grouped cross-validation
+│   ├── metadata.py         # model metadata sidecar
+│   ├── api.py              # optional FastAPI transport
+│   ├── observability.py    # optional logging/metric hooks
+│   ├── llm.py              # optional Gemini adapter
+│   └── llm_evaluate.py     # optional live comparison
+├── tests/                  # deterministic unit and integration tests
+├── requirements/           # runtime and development dependency sets
+├── .github/workflows/ci.yml
+├── Dockerfile
+├── pyproject.toml
+└── train.csv
+```
+
+Generated artifacts, caches, `.env`, virtual environments, and datasets are
+excluded from version control where appropriate.
+
+## 4. Installation
+
+Python 3.11 or newer is required. From the repository root:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+Install development/test tooling separately:
+
+```bash
+python -m pip install -e '.[test]'
+```
+
+The optional HTTP service requires `python -m pip install -e '.[api]'`. The
+classical commands do not require FastAPI, Docker, Gemini, an API key, or network
+access.
+
+## 5. Training
+
+Input must be a CSV with `text` and `label` columns. Messages must be non-empty
+strings and labels must be one of the four routes.
 
 ```bash
 .venv/bin/python -m ticket_triage.train \
   --data train.csv \
-  --model-output artifacts/ticket_classifier.joblib \
+  --model-output artifacts/model.joblib \
   --class-weight balanced
 ```
 
-The CLI evaluates a word unigram/bigram TF-IDF plus logistic-regression
-pipeline on a reproducible stratified 80/20 split. It then fits a fresh pipeline
-on all validated rows and saves it with joblib. Keeping TF-IDF inside the
-pipeline ensures it is fitted only on training rows during validation.
+The CLI uses a fixed random seed of `42` and a stratified 80/20 validation split,
+prints metrics, then refits on all validated rows. `--class-weight` accepts `none`
+or `balanced`. The recommended submitted model uses `balanced` because grouped
+evaluation measured higher fraud recall, despite lower precision and macro F1.
 
-`--class-weight` accepts `none` or `balanced`.
+The `.joblib` artifact is one fitted scikit-learn pipeline containing both TF-IDF
+and logistic regression. Training also writes
+`artifacts/model.joblib.metadata.json` with aggregate training/configuration data,
+not ticket messages.
 
-## Predict and score a holdout
+## 6. Evaluation
 
-Load a previously fitted model for one-message inference:
+### Fixed 80/20 validation split
 
-```python
-from ticket_triage import load_model
+The balanced command above reproduced these results on 80 validation rows:
 
-predictor = load_model("artifacts/ticket_classifier.joblib")
-label = predictor.predict("I cannot access my account")
-result = predictor.predict_with_confidence("I did not authorize this transfer")
+| Metric | Value |
+|---|---:|
+| Accuracy | 1.0000 |
+| Macro F1 | 1.0000 |
+| Fraud recall | 1.0000 |
+
+| Class | Precision | Recall | F1 | Support |
+|---|---:|---:|---:|---:|
+| account-access | 1.0000 | 1.0000 | 1.0000 | 20 |
+| transaction-dispute | 1.0000 | 1.0000 | 1.0000 | 18 |
+| fraud-report | 1.0000 | 1.0000 | 1.0000 | 10 |
+| general | 1.0000 | 1.0000 | 1.0000 | 32 |
+
+Confusion-matrix label order is account-access, transaction-dispute,
+fraud-report, general:
+
+```text
+[[20,  0,  0,  0],
+ [ 0, 18,  0,  0],
+ [ 0,  0, 10,  0],
+ [ 0,  0,  0, 32]]
 ```
 
-Score an unseen CSV without retraining:
+This perfect random-split result is suspiciously high because related templates
+cross the partition; it does not demonstrate generalization.
 
-```bash
-.venv/bin/python -m ticket_triage.score \
-  --model artifacts/ticket_classifier.joblib \
-  --input holdout.csv \
-  --output predictions/holdout.csv
-```
-
-Use `--text-column message` when the input column is not named `text`. The
-output preserves every input row and column in its original order, then adds
-`prediction` and `confidence`. Invalid rows fail the complete scoring operation;
-they are never silently dropped. Inference is entirely local and never fits the
-pipeline on holdout messages.
-
-Confidence is the maximum value returned by logistic regression's
-`predict_proba`. It is an uncalibrated model score, not a calibrated probability
-that the prediction is correct.
-
-## Evaluation caveat
-
-Macro F1 is the overall metric, with fraud recall reported separately because
-missing fraud has higher operational cost. The supplied data contains many
-synthetic-looking variants of the same messages. A random split therefore puts
-closely related templates in both partitions and can produce a suspiciously
-high score. It is the requested baseline, but it does not prove generalization
-to independently written tickets or the hidden holdout.
-
-## Leakage-aware robustness evaluation
+### Five-fold random and template-grouped evaluation
 
 ```bash
 .venv/bin/python -m ticket_triage.robustness --data train.csv
 ```
 
-This fixed comparison uses out-of-fold predictions from five-fold
-`StratifiedKFold` and five-fold `StratifiedGroupKFold`. The grouping heuristic
-normalizes only superficial template variation: case, anchored greetings and
-closings, known cryptocurrency/asset names, numeric amounts, punctuation, and
-whitespace. It is conservative rather than semantic, and it is used only to
-assign evaluation groups. The classifier always receives the untouched message.
-
-Template normalization is therefore a robustness check, not an alternative
-preprocessing pipeline. Its results should be read alongside the ordinary CV
-result and not repeatedly tuned against.
-
-The fixed-seed evaluation produced 92 heuristic groups from 400 rows:
+The command generates out-of-fold predictions with fixed-seed five-fold
+`StratifiedKFold` and `StratifiedGroupKFold`:
 
 | Experiment | Accuracy | Macro F1 | Fraud precision | Fraud recall | Fraud F1 |
 |---|---:|---:|---:|---:|---:|
@@ -94,126 +156,161 @@ The fixed-seed evaluation produced 92 heuristic groups from 400 rows:
 | Grouped CV, unweighted | 0.8750 | 0.8518 | 1.0000 | 0.6000 | 0.7500 |
 | Grouped CV, balanced | 0.8175 | 0.8043 | 0.6333 | 0.7600 | 0.6909 |
 
-The grouped result confirms that ordinary random CV is overly optimistic.
-Balancing sacrifices grouped accuracy, macro F1, and fraud precision, but raises
-fraud recall from 0.60 to 0.76. Given the stated higher cost of missing fraud,
-the recommended final training configuration remains `balanced`; in production,
-the additional false-positive fraud escalations would need operational review.
+Template normalization folds case, anchored greetings/closings, known asset names,
+amounts, punctuation, and whitespace only to construct groups. The classifier
+always receives original text. This conservative robustness check reduces direct
+template leakage; it is neither classifier preprocessing nor proof of performance
+on an independently collected hidden holdout.
 
-## Test
+## 7. Metric reasoning
+
+Accuracy can hide weak minority-class behavior, particularly for the 50 fraud
+examples. Macro F1 weights each route equally, so it is the overall selection
+metric. Fraud recall is reported separately because a false negative may leave
+unauthorized activity in a routine queue, with greater customer and financial
+cost than an extra fraud review.
+
+The grouped comparison exposes the measured trade-off. Balancing raises fraud
+recall from `0.60` to `0.76`, while fraud precision falls from `1.00` to `0.6333`
+and macro F1 from `0.8518` to `0.8043`. Given the exercise's stated cost of missed
+fraud, `balanced` is the explicit risk-weighted choice. If macro F1 alone were the
+only objective, the grouped evidence favors unweighted training.
+
+## 8. Data quality and leakage
+
+`train.csv` contains 400 rows and two required columns:
+
+| Label | Rows | Share |
+|---|---:|---:|
+| general | 160 | 40.0% |
+| account-access | 100 | 25.0% |
+| transaction-dispute | 90 | 22.5% |
+| fraud-report | 50 | 12.5% |
+
+The audit found zero missing messages, missing labels, empty messages, unknown
+labels, exact duplicate rows, or exact duplicate message strings. It found only
+92 normalized template groups; 380 of 400 rows belong to groups containing more
+than one superficial variant. The wording therefore appears substantially
+templated or synthetic even without exact duplicates.
+
+Random validation can place such variants in training and validation, explaining
+the near-perfect scores. Grouped validation keeps each heuristic group in one fold
+and is more conservative, but the heuristic cannot identify every semantic
+duplicate or simulate future production language. Hidden-holdout performance
+remains uncertain.
+
+## 9. Single-message prediction
+
+`load_model` returns an interface with `predict(text) -> label`:
+
+```python
+from ticket_triage import load_model
+
+predictor = load_model("artifacts/model.joblib")
+label = predictor.predict("I cannot access my account")
+print(label)  # account-access
+```
+
+The example was verified against the balanced artifact generated by the training
+command.
+
+## 10. Holdout scoring
+
+The holdout requires a `text` column by default; use `--text-column` to select a
+different name. No retraining or TF-IDF fitting occurs.
+
+```bash
+.venv/bin/python -m ticket_triage.score \
+  --model artifacts/model.joblib \
+  --input holdout.csv \
+  --output predictions/holdout.csv
+```
+
+Input:
+
+```csv
+ticket_id,text
+T-2,I cannot log in
+T-1,How does staking work
+```
+
+Verified output:
+
+```csv
+ticket_id,text,prediction,confidence
+T-2,I cannot log in,account-access,0.4161020631167093
+T-1,How does staking work,general,0.6488530746471604
+```
+
+Every input row and column is preserved in order; `prediction` and `confidence`
+are appended. Invalid rows fail clearly rather than being dropped. Confidence is
+the maximum logistic-regression `predict_proba` value and is not necessarily
+calibrated.
+
+## 11. Testing
 
 ```bash
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
-.venv/bin/python -m pytest
+.venv/bin/python -m pytest -q
 ```
 
-These are the local equivalents of the GitHub Actions checks. CI runs them on
-Python 3.11 and 3.12 for every pull request and push to `main`, then performs a
-production-image build without starting or publishing it. CI uses no secrets,
-customer-data uploads, or live Gemini evaluation.
+The current suite has 44 passing tests. It covers dataset and message validation,
+pipeline fitting and save/reload, single prediction, row-preserving CSV scoring and
+CLI execution, model metadata, template grouping, FastAPI endpoints/lifecycle and
+review policy, logging privacy, and mocked Gemini response/retry/cache behavior.
+Tests use temporary small datasets and make no live external calls.
 
-## Optional HTTP API
+## 12. Optional extension: FastAPI service
 
-Install the API extra and train the classical model first:
+Install the API extra and train the model before starting the service:
 
 ```bash
 .venv/bin/pip install -e '.[api]'
-.venv/bin/python -m ticket_triage.train \
-  --data train.csv \
-  --model-output artifacts/model.joblib \
-  --class-weight balanced
-```
-
-`MODEL_PATH` selects the fitted pipeline and defaults to
-`artifacts/model.joblib`.
-
-```bash
 MODEL_PATH=artifacts/model.joblib \
+LOW_CONFIDENCE_THRESHOLD=0.60 \
   .venv/bin/uvicorn ticket_triage.api:app --host 0.0.0.0 --port 8000
 ```
+
+FastAPI lifespan handling loads exactly one model for the process. It never trains
+or changes the model. `MODEL_PATH` defaults to `artifacts/model.joblib`.
+
+- `GET /health`: liveness; HTTP 200 even if the model failed to load
+- `GET /ready`: HTTP 200 only with a loaded model, otherwise HTTP 503
+- `POST /predict`: one ticket, maximum 4,000 characters
+- `POST /predict/batch`: 1–100 tickets, preserving order
 
 ```bash
 curl --fail http://127.0.0.1:8000/health
 curl --fail http://127.0.0.1:8000/ready
-curl --fail --request POST http://127.0.0.1:8000/predict \
-  --header 'Content-Type: application/json' \
-  --data '{"text":"Someone withdrew BTC without my permission."}'
-curl --fail --request POST http://127.0.0.1:8000/predict/batch \
-  --header 'Content-Type: application/json' \
-  --data '{"texts":["I cannot log in.","I never authorized this withdrawal."]}'
+curl --fail -X POST http://127.0.0.1:8000/predict \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Someone withdrew BTC without my permission."}'
+curl --fail -X POST http://127.0.0.1:8000/predict/batch \
+  -H 'Content-Type: application/json' \
+  -d '{"texts":["I cannot log in.","I never authorized this withdrawal."]}'
 ```
 
-The process loads the model once through FastAPI lifespan handling and never
-trains or changes it. Messages are limited to 4,000 characters and batches to
-100 messages. A lock protects concurrent read-only access to the shared fitted
-pipeline. Endpoints remain synchronous and thin; for materially larger CPU
-workloads, use additional worker processes or move inference to a controlled
-thread pool rather than adding ad-hoc async wrappers.
+A verified single response from the current artifact is:
 
-Returned confidence is rounded to six decimal places only at serialization.
-The underlying logistic-regression probability is not calibrated and should
-not be interpreted as the probability that a prediction is correct.
-
-Set the operational review threshold with `LOW_CONFIDENCE_THRESHOLD` (default
-`0.60`):
-
-```bash
-LOW_CONFIDENCE_THRESHOLD=0.60 MODEL_PATH=artifacts/model.joblib \
-  .venv/bin/uvicorn ticket_triage.api:app --host 0.0.0.0 --port 8000
+```json
+{"label":"fraud-report","confidence":0.650233,"requires_review":false}
 ```
 
-API predictions include `requires_review`; the label is never changed when the
-confidence falls below the threshold. This threshold is an operational policy,
-not a calibrated correctness probability, and should be selected from validation
-results and the business costs of false positives and false negatives.
+`requires_review` marks scores below `LOW_CONFIDENCE_THRESHOLD` without changing
+the label. The default `0.60` is an operational placeholder, not an automatically
+validated threshold or calibrated correctness probability; deployment must select
+it from validation, calibration, capacity, and business-cost analysis.
 
-## Production considerations
+## 13. Optional extension: container
 
-- **Monitoring:** JSON completion logs contain request ID, route, status,
-  latency, and model version, but never request bodies. Thread-safe in-process
-  hooks count requests and latency, predicted labels, validation failures,
-  low-confidence predictions, and model-loading failures. A production adapter
-  can expose these counters to Prometheus without changing inference logic.
-- **Drift:** Monitor both feature/data drift and predicted-label distribution.
-  Separately audit label drift because routing definitions and fraud patterns can
-  change even when ticket language appears stable.
-- **Fraud and review:** Track fraud false negatives as a first-class operational
-  measure. High-risk and low-confidence tickets should be considered for human
-  review, with the review threshold chosen using validation and cost analysis.
-- **Retraining and versions:** Training writes a JSON sidecar containing the UTC
-  timestamp, row and class counts, model/vectorizer configuration, label list,
-  validation metrics, and package version—never training messages. Use this
-  metadata plus immutable artifact identifiers to govern retraining, deployment,
-  and rollback to a previously validated artifact.
-- **Privacy and abuse controls:** Ticket text is processed locally and omitted
-  from application logs. The API enforces a 4,000-character message limit and a
-  100-message batch limit. In a real deployment, authentication, TLS termination,
-  request-size enforcement, and rate limiting belong at a managed API gateway;
-  this exercise deliberately does not implement custom authentication.
-
-`/health` is process liveness and remains HTTP 200 when the model is unavailable;
-`/ready` returns HTTP 503 in that case. The lifespan loads one model copy and
-releases it on shutdown. For heavier CPU inference, scale controlled worker
-processes or use a bounded thread pool while accounting for one model copy per
-worker.
-
-## Container
-
-Training and serving are separate lifecycle stages. Train on the host; the
-container only loads the resulting read-only artifact and serves predictions.
+Training and serving are separate lifecycle stages. Train on the host, build the
+image, and mount the artifact read-only:
 
 ```bash
 .venv/bin/python -m ticket_triage.train \
-  --data train.csv \
-  --model-output artifacts/model.joblib \
-  --class-weight balanced
+  --data train.csv --model-output artifacts/model.joblib --class-weight balanced
 docker build --tag ticket-triage-api .
-```
-
-Run the image with the artifact directory mounted read-only:
-
-```bash
 docker run --rm --detach \
   --name ticket-triage-api \
   --publish 8000:8000 \
@@ -222,71 +319,145 @@ docker run --rm --detach \
   ticket-triage-api
 ```
 
-Wait for readiness, then inspect health and request a prediction:
-
 ```bash
 until curl --fail --silent http://127.0.0.1:8000/ready; do sleep 1; done
-curl --fail http://127.0.0.1:8000/health
-curl --fail --request POST http://127.0.0.1:8000/predict \
-  --header 'Content-Type: application/json' \
-  --data '{"text":"Someone withdrew BTC without my permission."}'
-```
-
-Confirm the service user is non-root and stop the container:
-
-```bash
+curl --fail -X POST http://127.0.0.1:8000/predict \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Someone withdrew BTC without my permission."}'
 test "$(docker exec ticket-triage-api id -u)" -ne 0
 docker stop ticket-triage-api
 ```
 
-The image uses Python 3.12 slim, installs only the bounded direct dependencies
-in `requirements/runtime.txt`, and runs as UID 10001. `.dockerignore` excludes
-Git metadata, credentials, virtual environments, tests, caches, datasets, and
-model files. The model must be supplied at runtime through `MODEL_PATH` and a
-volume mount; neither classical nor LLM training runs during image startup.
+The verified container returned the same valid fraud label/confidence/review
+schema shown above. The Python 3.12 slim image exposes port 8000, health-checks
+`/ready`, installs runtime dependencies only, and runs as non-root UID 10001. It
+never trains a classical or LLM model at startup. Dependencies use bounded direct
+versions rather than a lockfile, so builds are not claimed to be byte-identical.
 
-Reproducibility is managed through the pinned Python major/minor and bounded
-direct dependency versions. There is no lockfile, so builds are intentionally
-not claimed to be byte-for-byte reproducible; a release workflow should add a
-reviewed lockfile and optionally pin the base-image digest.
+## 14. Optional extension: continuous integration
 
-The production classifier remains usable without FastAPI, Docker, deep learning,
-or external services. The provider comparison below remains isolated and
-optional.
+`.github/workflows/ci.yml` runs on pull requests and pushes to `main`, with
+least-privilege `contents: read`. It tests Python 3.11 and 3.12 using:
 
-## Optional Gemini comparison
+```bash
+ruff check .
+ruff format --check .
+pytest -q
+```
 
-The classical classifier, scoring command, and default tests do not import the
-Gemini SDK and work without credentials or network access. To install the
-optional comparison dependency:
+After both Python jobs pass, CI builds—but does not publish—the Docker image. It
+requires no repository secrets and excludes live Gemini evaluation, so CI neither
+incurs provider cost nor transmits ticket data to an external LLM.
+
+## 15. Optional experiment: Gemini comparison
+
+Gemini is an isolated experiment for unfamiliar or semantically ambiguous tickets,
+not the mandatory classifier or default production path. Install it explicitly:
 
 ```bash
 .venv/bin/pip install -e '.[llm]'
-```
-
-Configure `GEMINI_API_KEY` and `GEMINI_MODEL` in the process environment (for
-example, export them from a local ignored `.env` before running the command).
-Pricing is not hard-coded because it varies by model and date; set
-`GEMINI_INPUT_COST_PER_MILLION` and `GEMINI_OUTPUT_COST_PER_MILLION` to include
-an estimated request cost.
-
-The live command is deliberately gated by explicit acknowledgement:
-
-```bash
+export GEMINI_API_KEY='set-outside-source-control'
+export GEMINI_MODEL='your-explicit-model-version'
 .venv/bin/python -m ticket_triage.llm_evaluate \
-  --data train.csv \
-  --cache artifacts/llm_cache.json \
-  --confirm-live
+  --data train.csv --cache artifacts/llm_cache.json --confirm-live
 ```
 
-It compares Gemini with the classical model on the same deterministic first
-fold from the existing template-grouped evaluation. Tickets are not used as
-few-shot examples. The prompt contains only the ticket, concise route
-definitions, and the fraud/dispute distinction. Responses are constrained and
-validated against the four approved labels, with bounded retries and no label
-fallback. The local cache uses hashed keys and stores labels, latency, and token
-counts—not ticket text or credentials.
+The prompt defines the same four labels and explicitly distinguishes recognized
+processing disputes from unauthorized/deceptive fraud. The adapter requests a
+structured JSON label constrained to the approved set, validates every response,
+uses bounded retries, and never silently substitutes a label. Configuration comes
+from environment variables; keys are not logged or stored in the cache.
 
-This comparison is optional, can incur API cost, and may not be reproducible
-across Gemini model versions. Reported latency includes provider latency, and
-token-derived cost is only an estimate based on the configured rates.
+The comparison uses the same deterministic first template-grouped fold for the
+balanced classical model and Gemini, without few-shot evaluation examples. The
+command reports macro F1, fraud precision/recall/F1, classical and Gemini latency,
+failures, invalid/retry outputs, and token usage. Cost is reported only when the
+operator supplies current input/output price rates.
+
+No complete, reproducible live Gemini result is claimed in this README. Therefore
+no LLM macro F1, fraud recall, latency, invalid-output rate, token total, or cost is
+reported. Results can vary with provider/model versions; tickets sent for live
+evaluation leave the local environment, so privacy approval and data minimization
+are required.
+
+## 16. Production architecture
+
+An evidence-based next architecture would keep the classical classifier on the
+ordinary path and send high-risk or genuinely uncertain tickets to human review.
+After calibration and cost analysis, an optional LLM escalation could be tested for
+semantically ambiguous cases; it should not silently replace the classical result.
+No arbitrary confidence threshold should be promoted automatically. Thresholds
+must be selected using validation data, calibrated scores where feasible, fraud
+false-negative cost, review capacity, and measured operational outcomes.
+
+## 17. Scaling to 10,000 requests per minute
+
+The sparse classical model is the default because inference is CPU-friendly and
+local, but this repository contains no throughput benchmark. Expected scaling is:
+
+- stateless API replicas behind a gateway/load balancer;
+- one immutable model loaded once per worker, with replica memory sized accordingly;
+- horizontal CPU scaling and bounded batch inference where latency requirements
+  permit it;
+- gateway rate limiting, authentication, TLS termination, and request-size limits;
+- dashboards and alerts for latency, errors, readiness, label mix, review rate,
+  drift, and fraud false negatives.
+
+Calling a generative LLM for every request would be expected to add network latency,
+provider dependency, privacy exposure, and variable cost. It is justified only if
+measured semantic gains on representative ambiguous tickets outweigh those costs,
+for example as a bounded escalation path rather than the default.
+
+## 18. Production considerations
+
+The optional API emits structured JSON completion logs with request ID, route,
+status, latency, and model version; raw ticket text and secrets are omitted.
+Thread-safe instrumentation hooks count requests and latency, validation and model
+load failures, predicted-label distribution, and low-confidence predictions. A
+production adapter could export these to Prometheus.
+
+Operations should monitor data drift, label-definition drift, predicted-label and
+low-confidence rates, calibration, and especially fraud false negatives. Model
+metadata records aggregate dataset/configuration/validation information to support
+versioning, retraining decisions, and rollback to an immutable validated artifact.
+Human review outcomes should feed controlled relabelling and retraining rather than
+automatic online learning.
+
+Ticket data is sensitive: minimize retention, redact infrastructure logs, restrict
+access, and define deletion policies. Authentication, TLS termination, rate
+limiting, WAF/request limits, and abuse controls belong at a managed API gateway;
+this exercise intentionally implements no custom authentication system.
+
+## 19. Scope and trade-offs
+
+The work prioritized validated local data handling, a leakage-safe classical
+pipeline, reproducible evaluation, robust holdout scoring, and focused tests.
+Deep-learning training, hyperparameter sweeps, semantic clustering, probability
+calibration, a hybrid router, custom authentication, a frontend, and a model
+registry were deliberately left out. They are unnecessary for the small exercise
+without stronger evidence or deployment requirements.
+
+FastAPI, container, CI, observability hooks, and Gemini isolation were included as
+small optional extensions demonstrating deployability; none is required to train
+or use the core classifier. With more time, the priority would be independently
+written production-like evaluation data, label-guideline adjudication, calibration,
+threshold/cost analysis, drift baselines, load testing, and monitored shadow trials.
+
+**Candidate time spent:** `[complete before submission: ___ hours]`
+
+## 20. Limitations
+
+- The training set has only 400 messages, including just 50 fraud examples.
+- Wording is heavily templated or synthetic-looking despite no exact duplicates.
+- Fraud and transaction-dispute boundaries can remain ambiguous in real language.
+- Random validation is optimistic; grouped validation is heuristic and uncertain.
+- Logistic-regression confidence is uncalibrated.
+- Real production-ticket evaluation and representative error review are required.
+- Language, fraud patterns, customer behavior, and label policy can drift.
+
+## 21. Submission checklist
+
+- GitHub repository: <https://github.com/krishabhilash/ticket_triage>
+- Real, unsquashed commit history with focused implementation stages
+- README with reproducible commands, measured results, and explicit limitations
+- Local checks: Ruff lint/format and **44 passing tests**
