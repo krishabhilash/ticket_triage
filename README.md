@@ -155,6 +155,49 @@ Returned confidence is rounded to six decimal places only at serialization.
 The underlying logistic-regression probability is not calibrated and should
 not be interpreted as the probability that a prediction is correct.
 
+Set the operational review threshold with `LOW_CONFIDENCE_THRESHOLD` (default
+`0.60`):
+
+```bash
+LOW_CONFIDENCE_THRESHOLD=0.60 MODEL_PATH=artifacts/model.joblib \
+  .venv/bin/uvicorn ticket_triage.api:app --host 0.0.0.0 --port 8000
+```
+
+API predictions include `requires_review`; the label is never changed when the
+confidence falls below the threshold. This threshold is an operational policy,
+not a calibrated correctness probability, and should be selected from validation
+results and the business costs of false positives and false negatives.
+
+## Production considerations
+
+- **Monitoring:** JSON completion logs contain request ID, route, status,
+  latency, and model version, but never request bodies. Thread-safe in-process
+  hooks count requests and latency, predicted labels, validation failures,
+  low-confidence predictions, and model-loading failures. A production adapter
+  can expose these counters to Prometheus without changing inference logic.
+- **Drift:** Monitor both feature/data drift and predicted-label distribution.
+  Separately audit label drift because routing definitions and fraud patterns can
+  change even when ticket language appears stable.
+- **Fraud and review:** Track fraud false negatives as a first-class operational
+  measure. High-risk and low-confidence tickets should be considered for human
+  review, with the review threshold chosen using validation and cost analysis.
+- **Retraining and versions:** Training writes a JSON sidecar containing the UTC
+  timestamp, row and class counts, model/vectorizer configuration, label list,
+  validation metrics, and package version—never training messages. Use this
+  metadata plus immutable artifact identifiers to govern retraining, deployment,
+  and rollback to a previously validated artifact.
+- **Privacy and abuse controls:** Ticket text is processed locally and omitted
+  from application logs. The API enforces a 4,000-character message limit and a
+  100-message batch limit. In a real deployment, authentication, TLS termination,
+  request-size enforcement, and rate limiting belong at a managed API gateway;
+  this exercise deliberately does not implement custom authentication.
+
+`/health` is process liveness and remains HTTP 200 when the model is unavailable;
+`/ready` returns HTTP 503 in that case. The lifespan loads one model copy and
+releases it on shutdown. For heavier CPU inference, scale controlled worker
+processes or use a bounded thread pool while accounting for one model copy per
+worker.
+
 ## Container
 
 Training and serving are separate lifecycle stages. Train on the host; the

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from ticket_triage.constants import LABEL_COLUMN, TEXT_COLUMN
 from ticket_triage.data import load_dataset, stratified_split
 from ticket_triage.evaluation import evaluate_predictions, format_evaluation
+from ticket_triage.metadata import build_model_metadata, save_model_metadata
 from ticket_triage.model import build_pipeline, fit_pipeline, predict, save_pipeline
 
 
@@ -44,6 +45,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     fit_pipeline(final_pipeline, frame)
     output_path = save_pipeline(final_pipeline, args.model_output)
     print(f"Saved fitted pipeline to {output_path}")
+    metadata = build_model_metadata(frame, final_pipeline, class_weight, result)
+    metadata_output = save_model_metadata(output_path, metadata)
+    print(f"Saved model metadata to {metadata_output}")
     return 0
 
 

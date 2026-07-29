@@ -1,5 +1,7 @@
 """HTTP behavior tests for the thin FastAPI transport."""
 
+import io
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -9,6 +11,7 @@ from fastapi.testclient import TestClient
 from ticket_triage.api import MAX_BATCH_SIZE, MAX_MESSAGE_LENGTH, create_app
 from ticket_triage.constants import ALLOWED_LABELS
 from ticket_triage.model import build_pipeline, fit_pipeline, save_pipeline
+from ticket_triage.observability import JsonFormatter
 
 
 @pytest.fixture()
@@ -67,6 +70,7 @@ def test_predict_returns_approved_label_and_confidence(client: TestClient) -> No
     assert response.status_code == 200
     assert response.json()["label"] in ALLOWED_LABELS
     assert 0.0 <= response.json()["confidence"] <= 1.0
+    assert isinstance(response.json()["requires_review"], bool)
 
 
 @pytest.mark.parametrize("text", ["", "   "])
@@ -97,6 +101,49 @@ def test_batch_prediction_preserves_order_and_shape(client: TestClient) -> None:
     assert len(predictions) == 2
     assert all(item["label"] in ALLOWED_LABELS for item in predictions)
     assert all(0.0 <= item["confidence"] <= 1.0 for item in predictions)
+    assert all(isinstance(item["requires_review"], bool) for item in predictions)
+
+
+def test_low_confidence_requires_review(
+    model_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MODEL_PATH", str(model_path))
+    monkeypatch.setenv("LOW_CONFIDENCE_THRESHOLD", "1")
+    with TestClient(create_app()) as review_client:
+        result = review_client.post("/predict", json={"text": "I cannot log in"})
+    assert result.json()["requires_review"] is True
+
+
+def test_high_confidence_does_not_require_review(
+    model_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MODEL_PATH", str(model_path))
+    monkeypatch.setenv("LOW_CONFIDENCE_THRESHOLD", "0")
+    with TestClient(create_app()) as review_client:
+        result = review_client.post("/predict", json={"text": "I cannot log in"})
+    assert result.json()["requires_review"] is False
+
+
+def test_request_logging_excludes_ticket_text(client: TestClient) -> None:
+    private_text = "PRIVATE-TICKET-CONTENT-12345"
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    api_logger = logging.getLogger("ticket_triage.api")
+    api_logger.addHandler(handler)
+    try:
+        response = client.post(
+            "/predict",
+            headers={"X-Request-ID": "safe-request-123"},
+            json={"text": private_text},
+        )
+    finally:
+        api_logger.removeHandler(handler)
+    captured = stream.getvalue()
+    assert response.headers["X-Request-ID"] == "safe-request-123"
+    assert private_text not in captured
+    assert "request_completed" in captured
+    assert "safe-request-123" in captured
 
 
 def test_batch_rejects_empty_list(client: TestClient) -> None:
@@ -117,7 +164,8 @@ def test_model_not_ready_behavior(
         ready = unavailable_client.get("/ready")
         prediction = unavailable_client.post("/predict", json={"text": "Help"})
 
-    assert health.json() == {"status": "unhealthy", "model_loaded": False}
+    assert health.status_code == 200
+    assert health.json() == {"status": "healthy", "model_loaded": False}
     assert ready.status_code == 503
     assert ready.json() == {"detail": "Model is not ready"}
     assert prediction.status_code == 503
